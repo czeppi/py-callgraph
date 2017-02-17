@@ -64,6 +64,7 @@ class Symbol:
 
     def __init__(self, name: str):
         self._name = name  # type: str
+        self._ref_expressions = set()  # type Set[Expression]
 
     @property
     def name(self) -> str:
@@ -76,6 +77,12 @@ class Symbol:
     @property
     def path(self) -> SymbolPath:
         raise Exception('not implemented.')
+
+    def add_ref_expr(self, expr: 'Expression'):
+        self._ref_expressions.add(expr)
+
+    def iter_ref_expressions(self):
+        yield from self._ref_expressions
 
 
 class Scope(Symbol):
@@ -90,6 +97,7 @@ class Scope(Symbol):
         self._ast_node = ast_node    # type: ast.AST
         self._calls = []             # type: List[Call]
         self._symbol_table = {}      # type: Mapping[str, Symbol]
+        self._statements = []    # type: List[Expression]
 
     def __str__(self):
         return str(self.path)
@@ -141,6 +149,9 @@ class Scope(Symbol):
         assert name not in self._symbol_table
         self._symbol_table[name] = symbol
 
+    def add_stmt(self, stmt: 'Statement'):
+        self._statements.append(stmt)
+
     @property
     def parent_scope(self) -> Optional['Scope']:
         return self._parent_scope
@@ -161,6 +172,14 @@ class Scope(Symbol):
 
     def iter_child_scopes(self) -> Iterator['Scope']:
         yield from self._child_scopes
+
+    def iter_self_and_child_scopes_recursive(self) -> Iterator['Scope']:
+        yield self
+        for child_scope in self._child_scopes:
+            yield from child_scope.iter_self_and_child_scopes_recursive()
+
+    def iter_statements(self):
+        yield from self._statements
 
     def iter_variables(self) -> Iterator['Variable']:
         yield from self._variables.values()
@@ -207,25 +226,34 @@ class Scope(Symbol):
         return symbol.find_local_symbol_by_path(symb_path.tail)
 
     def find_symbol_by_name(self, name: str) -> Optional[Symbol]:
-        if name in self._symbol_table:
-            return self._symbol_table[name]
-        if self.parent_scope is not None:
-            return self.parent_scope.find_symbol_by_name(name)
+        local_symbol = self.find_local_symbol_by_name(name)
+        if local_symbol is not None:
+            return local_symbol
+
+        global_scope = self._get_global_scope()
+        if global_scope is not None:
+            return global_scope.find_local_symbol_by_name(name)
 
     def find_symbol_by_fullname(self, fullname: str) -> Optional[Symbol]:
         return self.find_symbol_by_path(SymbolPath(fullname.split('.')))
 
     def find_symbol_by_path(self, symb_path: SymbolPath) -> Optional[Symbol]:
-        n = len(symb_path)
-        if n == 0:
+        local_symbol = self.find_local_symbol_by_path(symb_path)
+        if local_symbol is not None:
+            return local_symbol
+
+        global_scope = self._get_global_scope()
+        if global_scope is not None:
+            return global_scope.find_local_symbol_by_path(symb_path)
+
+    def _get_global_scope(self):
+        if self.parent_scope is None:
             return
 
-        name = symb_path.head
-        if name in self._symbol_table:
-            return self.find_local_symbol_by_path(symb_path.tail)
-
-        if self.parent_scope is not None:
-            return self.parent_scope.find_symbol_by_name(name)
+        scope = self.parent_scope
+        while scope.parent_scope is not None:
+            scope = scope.parent_scope
+        return scope
 
 
 class ProgContext:
